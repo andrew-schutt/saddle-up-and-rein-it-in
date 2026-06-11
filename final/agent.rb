@@ -17,8 +17,11 @@ class Agent
 
     iterations = 0
     loop do
+      if iterations == @max_iterations
+        give_up
+        break
+      end
       iterations += 1
-      raise "Agent exceeded #{@max_iterations} iterations" if iterations > @max_iterations
 
       response = @client.messages.create(
         model: @model,
@@ -63,6 +66,15 @@ class Agent
   end
 
   private
+
+  # When the cap is hit mid-task, end the turn with a synthesized assistant
+  # message instead of raising, so the outer REPL keeps going.
+  def give_up
+    text = "I had to stop after #{@max_iterations} iterations. " \
+           "The task may be incomplete — feel free to ask a follow-up."
+    puts text
+    @messages << { role: :assistant, content: text }
+  end
 
   # Shows the human what the model wants to run and asks for a y/n.
   def confirm?(block)
