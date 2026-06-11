@@ -43,7 +43,12 @@ class Agent
       break if tool_uses.empty?
 
       tool_uses.each do |block|
-        result = @registry.dispatch(block.name, block.input)
+        result =
+          if @registry.dangerous?(block.name) && !confirm?(block)
+            "The user declined to run #{block.name}."
+          else
+            @registry.dispatch(block.name, block.input)
+          end
         puts "[#{block.name}(#{block.input.inspect}) → #{result.inspect}]"
         @messages << {
           role: :user,
@@ -55,5 +60,14 @@ class Agent
         }
       end
     end
+  end
+
+  private
+
+  # Shows the human what the model wants to run and asks for a y/n.
+  def confirm?(block)
+    puts "Agent wants to run: #{block.name}(#{block.input.inspect})"
+    print "Allow? (y/n) "
+    gets&.chomp&.downcase == "y"
   end
 end

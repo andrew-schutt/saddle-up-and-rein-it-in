@@ -34,6 +34,11 @@ class Registry
     @tools.values.map { |tool| tool::SCHEMA }
   end
 
+  def dangerous?(name)
+    tool = @tools[name]
+    !tool.nil? && Tool.dangerous?(tool)
+  end
+
   def dispatch(name, input)
     tool = @tools[name]
     return "Error: unknown tool '#{name}'." unless tool
