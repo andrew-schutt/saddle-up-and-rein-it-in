@@ -5,8 +5,22 @@ require "time"
 # dispatch tool calls through the registry, feed results back, and repeat
 # until the model stops requesting tools. Each turn is appended as one JSON
 # line to final/agent.log.
+#
+# Context management: the harness never keeps a growing transcript. @messages
+# holds only the current turn; everything before it is folded into a single
+# running summary that rides along in the system prompt. At the end of each
+# turn the harness makes one extra model call to refresh that summary.
 class Agent
   LOG_PATH = File.expand_path("agent.log", __dir__)
+
+  SUMMARIZE_PROMPT = <<~PROMPT
+    You maintain a concise running summary of a conversation between a user
+    and an assistant. Given the previous summary and the latest exchange,
+    return an updated summary that preserves durable facts about the user,
+    their stated preferences, decisions made, and any unresolved threads.
+    Keep it tight — a few sentences at most. Return only the summary text,
+    with no preamble.
+  PROMPT
 
   def initialize(client:, model:, system_prompt:, registry:, max_iterations:)
     @client = client
@@ -15,11 +29,13 @@ class Agent
     @registry = registry
     @max_iterations = max_iterations
     @messages = []
+    @summary = ""
   end
 
   # Runs one full agent turn for the given user input.
   def run(user_input)
-    @messages << { role: :user, content: user_input }
+    # The summary carries all prior context, so the turn starts fresh.
+    @messages = [{ role: :user, content: user_input }]
 
     iterations = 0
     tool_calls = []
@@ -37,7 +53,7 @@ class Agent
       response = @client.messages.create(
         model: @model,
         max_tokens: 1024,
-        system: @system_prompt,
+        system: current_system,
         messages: @messages,
         tools: @registry.schemas
       )
@@ -82,6 +98,10 @@ class Agent
       end
     end
 
+    # Fold this turn into the running summary at the turn boundary, where
+    # there are no dangling tool_use/tool_result pairs to break.
+    compact!
+
     log_turn(
       user_input: user_input,
       iterations: iterations,
@@ -92,6 +112,28 @@ class Agent
   end
 
   private
+
+  # The system prompt for this turn: the base prompt, plus the running
+  # summary when there is one.
+  def current_system
+    return @system_prompt if @summary.empty?
+
+    "#{@system_prompt}\n\nConversation so far:\n#{@summary}"
+  end
+
+  # Refreshes @summary by asking the model to fold the latest turn into the
+  # previous summary. One extra call per turn, deliberately not counted in
+  # the loop's iterations.
+  def compact!
+    response = @client.messages.create(
+      model: @model,
+      max_tokens: 512,
+      system: "#{SUMMARIZE_PROMPT}\nPrevious summary:\n#{@summary.empty? ? "(none yet)" : @summary}",
+      messages: @messages + [{ role: :user, content: "Provide the updated running summary now." }]
+    )
+    text = response.content.select { |block| block.type == :text }.map(&:text).join("\n")
+    @summary = text.strip
+  end
 
   # Appends one JSON line describing the finished turn.
   def log_turn(record)
