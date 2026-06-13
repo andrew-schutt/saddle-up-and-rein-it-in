@@ -41,7 +41,10 @@ class Registry
 
   def dispatch(name, input)
     tool = @tools[name]
-    return "Error: unknown tool '#{name}'." unless tool
+    # Recovery-oriented: name the valid tools so the model can self-correct.
+    unless tool
+      return "Error: no tool named '#{name}'. Available tools: #{@tools.keys.join(", ")}."
+    end
 
     error = validate(tool::SCHEMA[:input_schema], input)
     return error if error
