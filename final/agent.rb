@@ -12,6 +12,7 @@ require "time"
 # turn the harness makes one extra model call to refresh that summary.
 class Agent
   LOG_PATH = File.expand_path("agent.log", __dir__)
+  MEMORY_PATH = File.expand_path("memory.txt", __dir__)
 
   SUMMARIZE_PROMPT = <<~PROMPT
     You maintain a concise running summary of a conversation between a user
@@ -29,7 +30,13 @@ class Agent
     @registry = registry
     @max_iterations = max_iterations
     @messages = []
-    @summary = ""
+    # Resume from the last session's summary, if one was saved.
+    @summary = File.exist?(MEMORY_PATH) ? File.read(MEMORY_PATH) : ""
+  end
+
+  # Persists the running summary so the next session can resume from it.
+  def save_memory
+    File.write(MEMORY_PATH, @summary)
   end
 
   # Runs one full agent turn for the given user input.

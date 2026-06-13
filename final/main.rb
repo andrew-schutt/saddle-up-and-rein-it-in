@@ -29,3 +29,6 @@ loop do
   agent.run(user_input)
   puts
 end
+
+# Save on clean exit only. A Ctrl-C mid-session won't reach here.
+agent.save_memory
