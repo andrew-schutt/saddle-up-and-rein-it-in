@@ -48,7 +48,10 @@ module Tools
       resp = Net::HTTP.get_response(uri)
       return "Forecast API returned status #{resp.code}." unless resp.is_a?(Net::HTTPSuccess)
 
-      resp.body
+      # Net::HTTP tags the body BINARY when the response names no charset.
+      # Open-Meteo sends UTF-8 (the units include "°F"), so say so, or every
+      # JSON.generate of this string downstream warns.
+      resp.body.force_encoding(Encoding::UTF_8)
     rescue => e
       "Error fetching forecast: #{e.message}"
     end

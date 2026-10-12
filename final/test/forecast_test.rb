@@ -46,6 +46,20 @@ class ForecastTest < Minitest::Test
     assert_equal "7", query["forecast_days"] # the default
   end
 
+  def test_the_body_comes_back_as_utf8_not_binary
+    # What Net::HTTP really hands back: the right bytes, tagged BINARY.
+    body = '{"hourly_units":{"temperature_2m":"°F"}}'.b
+    ok = response(Net::HTTPOK, "200", body)
+
+    result = stubbing(Tools::Weather, :geocode, DENVER) do
+      stubbing(Net::HTTP, :get_response, ok) { Tools::Forecast.call(city: "Denver") }
+    end
+
+    assert_equal Encoding::UTF_8, result.encoding
+    assert result.valid_encoding?
+    assert_includes JSON.generate({ result: result }), "°F"
+  end
+
   def test_days_is_passed_through
     requested = nil
     ok = response(Net::HTTPOK, "200", "{}")
