@@ -1,3 +1,4 @@
 final/agent.log
 final/memory.txt
 *.swp
+.claude/settings.local.json
