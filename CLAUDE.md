@@ -12,7 +12,7 @@ Anthropic API.
 - `harness_simple.rb` — the naive "before": one ~80-line file with a single
   tool function, a `case` dispatcher, and an inline REPL + agent loop.
 - `final/` — the polished "after": the same agent restructured into formal
-  abstractions, built up in **nine commits, each adding one capability.**
+  abstractions, built up in **ten layers, each adding one capability.**
 
 Because the audience reads the git log as a story, the commit history *is* part
 of the artifact. `final/LAYERS.md` is the canonical layer-by-layer walkthrough
@@ -25,6 +25,7 @@ small, single-purpose commits that match the existing layered narrative.
 # Run the harnesses (interactive REPLs; empty line or Ctrl-D exits)
 ruby harness_simple.rb          # naive version
 ruby final/main.rb              # polished version
+TRACE=1 ruby final/main.rb      # ...with a live trace of every call on stderr
 
 # Tests (Minitest, ships with Ruby; runs offline against a fake client)
 rake test                       # run everything
@@ -45,7 +46,8 @@ the turn, Registry owns the tools, Tool owns the convention:**
   prompt, registry of tool modules, iteration cap) and reads user input.
 - `agent.rb` — the `Agent` class owns one turn: the inner model loop, the
   dangerous-tool confirmation gate, the soft iteration cap, JSON logging,
-  compaction, and persistence.
+  compaction, persistence, and per-call observability (every model call
+  goes through `call_model`, which logs tokens, latency, and depth).
 - `registry.rb` — name→module lookup, schema validation, and dispatch. Pure
   routing; it never talks to the human.
 - `tool.rb` — the `Tool` contract every tool module follows, plus
@@ -83,7 +85,8 @@ validates the model's input against `input_schema` before dispatch.
 
 ### Session files (gitignored, written to `final/`)
 
-`final/main.rb` writes `agent.log` (one JSON line per turn) and `memory.txt`
+`final/main.rb` writes `agent.log` (one JSON line per event: each
+`model_call` and `tool_call`, then a `turn` line that totals them) and `memory.txt`
 (the running summary, saved on **clean exit only** and reloaded at startup so
 memory survives across runs). Delete either file to reset it; a Ctrl-C mid-
 session won't persist memory. Paths are anchored with `__dir__`, so they always
@@ -96,7 +99,8 @@ land in `final/` regardless of launch directory.
 `module_function` tools, and **stdlib + the `anthropic` gem only** — no other
 gems. Match this when extending the code.
 
-Tests inject a `FakeAnthropic` client (a programmed queue of responses) and
+Tests inject a `FakeAnthropic` client (a programmed queue of responses, each
+reporting a fixed usage of 100 in / 20 out) and
 redirect `LOG_PATH`/`MEMORY_PATH` to a temp dir, so the suite is deterministic
 and offline. Follow that pattern rather than reaching for a mocking library
 (`test_helper.rb` even ships its own tiny `stubbing` helper, since minitest 6

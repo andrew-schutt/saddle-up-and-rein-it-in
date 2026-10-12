@@ -17,7 +17,10 @@ agent = Agent.new(
   model: :"claude-sonnet-4-5",
   system_prompt: SYSTEM_PROMPT,
   registry: Registry.new([Tools::Weather, Tools::FileDelete]),
-  max_iterations: 25
+  max_iterations: 25,
+  # TRACE=1 ruby final/main.rb prints every model and tool call live to
+  # stderr. Everything is logged to final/agent.log either way.
+  trace: ENV["TRACE"] == "1"
 )
 
 loop do

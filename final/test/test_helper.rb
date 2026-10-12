@@ -17,9 +17,12 @@ Agent.const_set(:MEMORY_PATH, File.join(TEST_TMP, "memory.txt"))
 
 # A stand-in for Anthropic::Client. Programmed with a queue of response
 # contents (one array of blocks per API call) and records every create
-# call's keyword args, so tests can assert on what the harness sent.
+# call's keyword args, so tests can assert on what the harness sent. Every
+# response reports a fixed usage (100 in / 20 out) so token totals are
+# predictable.
 class FakeAnthropic
-  Response = Struct.new(:content)
+  Response = Struct.new(:content, :usage, :stop_reason)
+  Usage = Struct.new(:input_tokens, :output_tokens)
   Block = Struct.new(:type, :text, :name, :input, :id, keyword_init: true)
 
   attr_reader :calls
@@ -34,7 +37,9 @@ class FakeAnthropic
 
   def create(**kwargs)
     @calls << kwargs
-    Response.new(@responses.shift || [])
+    content = @responses.shift || []
+    stop_reason = content.any? { |block| block.type == :tool_use } ? :tool_use : :end_turn
+    Response.new(content, Usage.new(100, 20), stop_reason)
   end
 
   def self.text(str)
@@ -99,13 +104,14 @@ end
 
 # Shared builders for the agent tests.
 module TestHelpers
-  def build_agent(client, tools: [EchoTool, DangerTool], max_iterations: 5)
+  def build_agent(client, tools: [EchoTool, DangerTool], max_iterations: 5, **options)
     Agent.new(
       client: client,
       model: :"claude-sonnet-4-5",
       system_prompt: "BASE",
       registry: Registry.new(tools),
-      max_iterations: max_iterations
+      max_iterations: max_iterations,
+      **options
     )
   end
 end

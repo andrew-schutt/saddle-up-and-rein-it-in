@@ -25,6 +25,7 @@ stdlib + the `anthropic` gem only) match the naive version throughout.
 | `565e1e7` | 8 | persistent memory across runs |
 | `aa90c46` | 9 | hallucinated-tool recovery |
 | `82ffbb6` | — | cleanup: ignore vim swap files |
+| *(this commit)* | 10 | per-call observability: tokens, latency, depth, live trace |
 
 ## Final file layout
 
@@ -507,6 +508,79 @@ string-distance "did you mean."
 
 ---
 
+## Layer 10: per-call observability (*this commit*)
+
+Layer 6 logged one line per **turn**. That tells you what happened, but not
+what it cost or where the time went. Layer 10 logs every **event** — each
+model call and each tool call gets its own JSON line — and the turn line now
+totals them. Everything still lands in `final/agent.log`; an `event` field
+tells the line types apart.
+
+Every model call already went through `@client.messages.create` in two places
+(the loop and `compact!`). Both now go through one private method, so neither
+can escape measurement:
+
+```ruby
+def call_model(purpose:, iteration: nil, **params)
+  started = now
+  response = @client.messages.create(**params)
+  usage = response.usage
+  ...
+  log_event({
+    event: "model_call", purpose: purpose, iteration: iteration,
+    model: params[:model],
+    input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
+    stop_reason: response.stop_reason, latency_ms: elapsed_ms(started)
+  }.compact)
+  response
+end
+```
+
+Tool dispatch gets the same treatment. The timer wraps the tool itself, not
+the human deciding whether to allow it, so a declined dangerous call logs
+`declined: true` with `latency_ms: 0`.
+
+Every line shares one envelope — `timestamp`, `event`, `depth`, `turn` — via
+`log_event`. `depth` is new: the `Agent` constructor takes `depth: 0`, and
+every line carries it. Nothing runs deeper than 0 yet; it's there so an agent
+started by another agent can log one level down and the log reads as a tree.
+
+A turn now produces lines like (numbers illustrative):
+
+```json
+{"timestamp":"…","event":"model_call","depth":0,"turn":1,"purpose":"loop","iteration":1,"model":"claude-sonnet-4-5","input_tokens":812,"output_tokens":64,"stop_reason":"tool_use","latency_ms":1240}
+{"timestamp":"…","event":"tool_call","depth":0,"turn":1,"name":"get_weather","input":{"city":"Denver"},"result":"Denver, United States: …","declined":false,"latency_ms":310}
+{"timestamp":"…","event":"model_call","depth":0,"turn":1,"purpose":"loop","iteration":2,…,"stop_reason":"end_turn",…}
+{"timestamp":"…","event":"model_call","depth":0,"turn":1,"purpose":"compact",…}
+{"timestamp":"…","event":"turn","depth":0,"turn":1,"user_input":"…","iterations":2,"tool_calls":[…],"final_text":"…","exit_reason":"completed","model_calls":3,"input_tokens":…,"output_tokens":…,"latency_ms":…}
+```
+
+Note the `compact` line: the summary call is deliberately not counted in the
+loop's iterations (Layer 7), but it costs tokens, so it is counted in the
+turn's totals.
+
+For the stage, `trace: true` mirrors the same events to stderr as they happen,
+indented by depth so nested agents nest visually (numbers below illustrative). `main.rb` turns it on with
+an environment variable:
+
+```sh
+TRACE=1 ruby final/main.rb
+```
+
+```
+· model loop  in=812 out=64  1240ms  (tool_use)
+· tool  get_weather  310ms
+· model loop  in=905 out=88  1105ms  (end_turn)
+· model compact  in=640 out=41  780ms  (end_turn)
+· turn 1  3 model calls  in=2357 out=193  3460ms  completed
+```
+
+stderr keeps the trace out of the assistant's answer on stdout. Tests in
+`final/test/observability_test.rb`; `FakeAnthropic` now returns a fixed usage
+(100 in / 20 out) and a `stop_reason`, so totals are predictable.
+
+---
+
 ## The through-line
 
 Two themes worth pointing at on a slide:
@@ -520,3 +594,7 @@ Two themes worth pointing at on a slide:
    Layers 7→8 are the context-management arc: compaction bounds the context so
    it can't overflow (7), and persistence makes that compact memory survive a
    restart (8).
+
+3. **The harness keeps itself in view.** Layer 6 recorded each turn; Layer 10
+   records each call inside it — tokens, latency, depth. Guardrails control
+   what the agent does. The log shows what it did.
