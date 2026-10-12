@@ -9,7 +9,7 @@ end
 def dispatch(name, input)
   case name
   when "get_weather"
-    get_weather(input)
+    get_weather(input[:city])
   else
     raise "Unknown tool: #{name}"
   end
