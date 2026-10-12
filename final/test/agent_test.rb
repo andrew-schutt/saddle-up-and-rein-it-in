@@ -3,7 +3,9 @@ require_relative "test_helper"
 # The agent loop, driven by a fake client so it runs offline and
 # deterministically. Covers the loop (Layer 2), the dangerous-tool gate
 # (Layer 4), the soft cap (Layer 5), compaction (Layer 7), persistence
-# (Layer 8), and hallucinated-tool recovery seen through the loop (Layer 9).
+# (Layer 8), hallucinated-tool recovery seen through the loop (Layer 9), and
+# the pieces subagents need (Layer 11): run's return value, memory: nil, and
+# depth-indented, truncated console output.
 class AgentTest < Minitest::Test
   include TestHelpers
 
@@ -140,5 +142,68 @@ class AgentTest < Minitest::Test
 
     second = build_agent(FakeAnthropic.new([]))
     assert_equal "User lives in Denver.", second.instance_variable_get(:@summary)
+  end
+
+  def test_run_returns_the_final_text
+    client = FakeAnthropic.new([
+      [FakeAnthropic.tool_use("echo", { msg: "hi" })],
+      [FakeAnthropic.text("All done.")],
+      [FakeAnthropic.text("summary")]
+    ])
+
+    assert_equal "All done.", build_agent(client).run("please echo")
+  end
+
+  def test_memory_nil_ignores_the_saved_summary
+    File.write(Agent::MEMORY_PATH, "User lives in Denver.")
+
+    agent = build_agent(FakeAnthropic.new([]), memory: nil)
+
+    assert_equal "", agent.instance_variable_get(:@summary)
+  end
+
+  def test_console_echo_truncates_long_tool_results_but_the_log_keeps_them
+    File.delete(Agent::LOG_PATH) if File.exist?(Agent::LOG_PATH)
+    long = "x" * 200
+    client = FakeAnthropic.new([
+      [FakeAnthropic.tool_use("echo", { msg: long })],
+      [FakeAnthropic.text("done")],
+      [FakeAnthropic.text("summary")]
+    ])
+
+    build_agent(client).run("echo something long")
+
+    echo = $stdout.string.lines.find { |line| line.start_with?("[echo(") }
+    shown = echo[/→ "(.*)"\]$/, 1]
+    assert_equal 120, shown.length
+    assert shown.end_with?("…")
+    logged = File.readlines(Agent::LOG_PATH).map { |line| JSON.parse(line, symbolize_names: true) }
+    assert_equal "echoed: #{long}", logged.find { |e| e[:event] == "tool_call" }[:result]
+  end
+
+  def test_console_output_is_indented_two_spaces_per_depth
+    client = FakeAnthropic.new([
+      [FakeAnthropic.tool_use("echo", { msg: "hi" })],
+      [FakeAnthropic.text("line one\nline two")],
+      [FakeAnthropic.text("summary")]
+    ])
+
+    build_agent(client, depth: 2).run("please echo")
+
+    lines = $stdout.string.lines
+    assert_includes lines, "    [echo({msg: \"hi\"}) → \"echoed: hi\"]\n"
+    assert_includes lines, "    line one\n"
+    assert_includes lines, "    line two\n"
+  end
+
+  def test_top_level_console_output_is_not_indented
+    client = FakeAnthropic.new([
+      [FakeAnthropic.text("Hi there!")],
+      [FakeAnthropic.text("summary")]
+    ])
+
+    build_agent(client).run("hello")
+
+    assert_equal "Hi there!\n", $stdout.string
   end
 end

@@ -25,7 +25,8 @@ stdlib + the `anthropic` gem only) match the naive version throughout.
 | `565e1e7` | 8 | persistent memory across runs |
 | `aa90c46` | 9 | hallucinated-tool recovery |
 | `82ffbb6` | — | cleanup: ignore vim swap files |
-| *(this commit)* | 10 | per-call observability: tokens, latency, depth, live trace |
+| `49bf9a7` | 10 | per-call observability: tokens, latency, depth, live trace |
+| *(this commit)* | 11 | subagents: a tool that runs a fresh `Agent` one level down |
 
 ## Final file layout
 
@@ -33,11 +34,13 @@ stdlib + the `anthropic` gem only) match the naive version throughout.
 final/
 ├── main.rb          # wiring + outer REPL (owns the human)
 ├── agent.rb         # inner loop, confirmation gate, soft cap, logging,
-│                    #   compaction, persistence (owns the turn)
+│                    #   compaction, persistence, observability (owns the turn)
 ├── registry.rb      # name→module lookup, schema validation, dispatch (owns routing)
 ├── tool.rb          # the contract + conformance check (owns the convention)
 └── tools/
-    ├── weather.rb   # real Open-Meteo lookup
+    ├── weather.rb   # real Open-Meteo lookup (current conditions)
+    ├── forecast.rb  # real Open-Meteo hourly forecast, raw JSON
+    ├── delegate.rb  # hands a task to a fresh helper Agent
     └── file_delete.rb  # stubbed dangerous tool for the demo
 ```
 
@@ -508,7 +511,7 @@ string-distance "did you mean."
 
 ---
 
-## Layer 10: per-call observability (*this commit*)
+## Layer 10: per-call observability (`49bf9a7`)
 
 Layer 6 logged one line per **turn**. That tells you what happened, but not
 what it cost or where the time went. Layer 10 logs every **event** — each
@@ -581,9 +584,76 @@ stderr keeps the trace out of the assistant's answer on stdout. Tests in
 
 ---
 
+## Layer 11: subagents (*this commit*)
+
+A subagent is just a tool whose `call` happens to start another `Agent`.
+Nothing about the loop changes; the new piece is `final/tools/delegate.rb`:
+
+```ruby
+description: "Hand one self-contained weather task to a helper agent. " \
+             "The helper starts with no memory of this conversation, " \
+             "so include the city and exactly what you need back."
+
+def call(input)
+  child = Agent.new(
+    client:         @client,
+    model:          @model,
+    registry:       @registry,       # weather + forecast. No delegate.
+    system_prompt:  SUBAGENT_PROMPT,
+    max_iterations: @max_iterations,
+    depth:          @depth + 1,
+    trace:          @trace,
+    memory:         nil              # fresh means fresh
+  )
+  child.run(input[:task])            # => String → tool_result
+end
+```
+
+Three small changes to `Agent` make that work:
+
+- **`run` returns `final_text`.** It used to return nothing; now the child's
+  answer is the return value, and the registry hands it back as the parent's
+  `tool_result`. A subagent's answer is a tool result like any other.
+- **`Agent.new` takes `memory:`.** The default is still the saved summary
+  from `memory.txt`. `memory: nil` starts empty and never reads the file, so
+  the helper can't see the human's history — which is why the description
+  tells the parent to put everything the helper needs into `task`.
+- **Console output is indented by depth** (two spaces per level), and the
+  `[tool(...) → result]` echo is cut to 120 characters. The log keeps the
+  full result.
+
+`depth` from Layer 10 finally gets a second value: the helper runs at depth 1,
+so its `model_call`, `tool_call`, and `turn` lines land in `agent.log` one
+level down, before the parent's `tool_call` line that waited on them.
+
+The demo needs a tool worth hiding. `final/tools/forecast.rb` (`get_forecast`)
+reuses `Tools::Weather.geocode` and returns Open-Meteo's **raw hourly JSON** —
+temperature, precipitation probability, wind, and weather code for every hour,
+several kilobytes for a week. That's deliberate. Run it two ways:
+
+```sh
+ruby final/main.rb               # parent has get_weather, get_forecast, delete_file
+SUBAGENTS=1 ruby final/main.rb   # parent has delegate, delete_file
+```
+
+Without subagents, the forecast JSON lands in the parent's context. With
+`SUBAGENTS=1`, only the helper reads it; the parent receives two sentences.
+Compare the `input_tokens` on the depth-0 `model_call` lines in `agent.log`.
+
+It's an environment variable, not a command-line flag, because `main.rb`
+reads input with `Kernel#gets`, which treats `ARGV` as a list of files to read.
+
+The helper's registry is `[Tools::Weather, Tools::Forecast]`: no `delegate`,
+so it can't recurse, and no `delete_file`, so dangerous calls stay with the
+agent the human is talking to. Tests in `final/test/delegate_test.rb` (one
+shared `FakeAnthropic` serves both agents, queued in call order),
+`final/test/forecast_test.rb`, and new cases in `final/test/agent_test.rb`.
+
+---
+
 ## The through-line
 
-Two themes worth pointing at on a slide:
+Themes worth pointing at on a slide:
 
 1. **Model mistakes become tool_results, not exceptions.** Bad input (Layer 3),
    human declines (Layer 4), the iteration cap (Layer 5), and invented tools
@@ -598,3 +668,8 @@ Two themes worth pointing at on a slide:
 3. **The harness keeps itself in view.** Layer 6 recorded each turn; Layer 10
    records each call inside it — tokens, latency, depth. Guardrails control
    what the agent does. The log shows what it did.
+
+4. **A subagent is a tool.** Layer 11 adds no new machinery to the loop: the
+   helper is an `Agent`, its answer is a `tool_result` string, and the context
+   it burns through is its own. Delegation is a way to keep the parent's
+   context small, the same goal as compaction (7).

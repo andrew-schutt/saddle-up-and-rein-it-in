@@ -12,7 +12,7 @@ Anthropic API.
 - `harness_simple.rb` — the naive "before": one ~80-line file with a single
   tool function, a `case` dispatcher, and an inline REPL + agent loop.
 - `final/` — the polished "after": the same agent restructured into formal
-  abstractions, built up in **ten layers, each adding one capability.**
+  abstractions, built up in **eleven layers, each adding one capability.**
 
 Because the audience reads the git log as a story, the commit history *is* part
 of the artifact. `final/LAYERS.md` is the canonical layer-by-layer walkthrough
@@ -26,11 +26,12 @@ small, single-purpose commits that match the existing layered narrative.
 ruby harness_simple.rb          # naive version
 ruby final/main.rb              # polished version
 TRACE=1 ruby final/main.rb      # ...with a live trace of every call on stderr
+SUBAGENTS=1 ruby final/main.rb  # ...with weather work handed to a helper agent
 
 # Tests (Minitest, ships with Ruby; runs offline against a fake client)
 rake test                       # run everything
 ruby final/test/registry_test.rb   # a single test file
-LIVE_TESTS=1 rake test          # also hit the real Open-Meteo API (1 skipped test)
+LIVE_TESTS=1 rake test          # also hit the real Open-Meteo API (2 skipped tests)
 ```
 
 Requires Ruby 3.2+ and a globally installed `anthropic` gem (`gem install
@@ -43,18 +44,31 @@ The slide-friendly separation of concerns — **main owns the human, Agent owns
 the turn, Registry owns the tools, Tool owns the convention:**
 
 - `main.rb` — wiring + the outer REPL. Constructs the `Agent` (model, system
-  prompt, registry of tool modules, iteration cap) and reads user input.
+  prompt, registry of tool modules, iteration cap) and reads user input. With
+  `SUBAGENTS=1` (an env var, because `Kernel#gets` reads `ARGV` as files) the
+  parent's registry is `[Delegate, FileDelete]` and `Delegate` is configured
+  with its own `[Weather, Forecast]` registry.
 - `agent.rb` — the `Agent` class owns one turn: the inner model loop, the
   dangerous-tool confirmation gate, the soft iteration cap, JSON logging,
   compaction, persistence, and per-call observability (every model call
   goes through `call_model`, which logs tokens, latency, and depth).
+  `run` returns the final text. `memory:` defaults to the saved summary;
+  `memory: nil` starts empty without reading the file. Console output is
+  indented two spaces per `depth`, and tool-result echoes are cut to 120
+  characters (the log keeps them whole).
 - `registry.rb` — name→module lookup, schema validation, and dispatch. Pure
   routing; it never talks to the human.
 - `tool.rb` — the `Tool` contract every tool module follows, plus
   `assert!`/`dangerous?` conformance checks.
 - `tools/*.rb` — individual tools. `weather.rb` is a real Open-Meteo lookup;
-  `file_delete.rb` is a **stubbed** dangerous tool (`DANGEROUS = true`) used to
-  demo the confirmation gate — it never touches the filesystem.
+  `forecast.rb` returns Open-Meteo's raw hourly JSON (deliberately verbose, so
+  the subagent demo has something to keep out of the parent's context);
+  `delegate.rb` is the subagent tool — its `call` builds a fresh `Agent` at
+  `depth + 1` with `memory: nil` and returns `child.run(task)`, configured
+  once via `Tools::Delegate.configure`; the child never gets `delegate` or
+  `delete_file`. `file_delete.rb` is a **stubbed** dangerous tool
+  (`DANGEROUS = true`) used to demo the confirmation gate — it never touches
+  the filesystem.
 
 ### Two load-bearing design principles
 

@@ -5,7 +5,9 @@ require "stringio"
 require_relative "../registry"
 require_relative "../agent"
 require_relative "../tools/weather"
+require_relative "../tools/forecast"
 require_relative "../tools/file_delete"
+require_relative "../tools/delegate"
 
 # Redirect the harness's output files to a throwaway temp dir so the suite
 # never touches the real final/agent.log or final/memory.txt. The methods

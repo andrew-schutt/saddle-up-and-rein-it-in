@@ -14,6 +14,11 @@ require "time"
 # final/agent.log as its own JSON line — tokens in and out, latency, and
 # depth — and each turn ends with one summary line that totals them. With
 # trace: true, the same events also print live to stderr, indented by depth.
+#
+# Subagents: an Agent can be started by a tool (see tools/delegate.rb). It
+# runs one level deeper, starts with memory: nil, and hands its final text
+# back as the parent's tool_result. Console output is indented by depth so
+# the helper's lines sit inside the parent's.
 class Agent
   LOG_PATH = File.expand_path("agent.log", __dir__)
   MEMORY_PATH = File.expand_path("memory.txt", __dir__)
@@ -27,7 +32,14 @@ class Agent
     with no preamble.
   PROMPT
 
-  def initialize(client:, model:, system_prompt:, registry:, max_iterations:, depth: 0, trace: false)
+  # Tool results can be long (a raw forecast is kilobytes of JSON). The log
+  # keeps every byte; the console echo is cut to this many characters.
+  CONSOLE_RESULT_LIMIT = 120
+
+  # memory: defaults to the last session's saved summary. Pass nil to start
+  # with an empty summary and never read the file.
+  def initialize(client:, model:, system_prompt:, registry:, max_iterations:, depth: 0, trace: false,
+                 memory: File.exist?(MEMORY_PATH) ? File.read(MEMORY_PATH) : "")
     @client = client
     @model = model
     @system_prompt = system_prompt
@@ -39,8 +51,7 @@ class Agent
     @trace = trace
     @turn = 0
     @messages = []
-    # Resume from the last session's summary, if one was saved.
-    @summary = File.exist?(MEMORY_PATH) ? File.read(MEMORY_PATH) : ""
+    @summary = memory || ""
   end
 
   # Persists the running summary so the next session can resume from it.
@@ -48,7 +59,8 @@ class Agent
     File.write(MEMORY_PATH, @summary)
   end
 
-  # Runs one full agent turn for the given user input.
+  # Runs one full agent turn for the given user input and returns the
+  # model's final text, so a parent agent can use it as a tool_result.
   def run(user_input)
     # The summary carries all prior context, so the turn starts fresh.
     @messages = [{ role: :user, content: user_input }]
@@ -86,7 +98,7 @@ class Agent
       response.content.each do |block|
         case block.type
         when :text
-          puts block.text
+          say block.text
           texts << block.text
         when :tool_use
           tool_uses << block
@@ -122,7 +134,7 @@ class Agent
           declined: declined,
           latency_ms: latency_ms
         )
-        puts "[#{block.name}(#{block.input.inspect}) → #{result.inspect}]"
+        say "[#{block.name}(#{block.input.inspect}) → #{truncate(result).inspect}]"
         @messages << {
           role: :user,
           content: [{
@@ -148,6 +160,8 @@ class Agent
       **@turn_usage,
       latency_ms: elapsed_ms(turn_started)
     )
+
+    final_text
   end
 
   private
@@ -224,7 +238,20 @@ class Agent
           "in=#{entry[:input_tokens]} out=#{entry[:output_tokens]}  " \
           "#{entry[:latency_ms]}ms  #{entry[:exit_reason]}"
       end
-    $stderr.puts "#{"  " * @depth}· #{line}"
+    $stderr.puts "#{indent}· #{line}"
+  end
+
+  # Console output, indented two spaces per depth level.
+  def say(text)
+    puts text.to_s.gsub(/^/, indent)
+  end
+
+  def indent = "  " * @depth
+
+  def truncate(text)
+    return text if text.length <= CONSOLE_RESULT_LIMIT
+
+    "#{text[0, CONSOLE_RESULT_LIMIT - 1]}…"
   end
 
   def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -236,15 +263,15 @@ class Agent
   def give_up
     text = "I had to stop after #{@max_iterations} iterations. " \
            "The task may be incomplete — feel free to ask a follow-up."
-    puts text
+    say text
     @messages << { role: :assistant, content: text }
     text
   end
 
   # Shows the human what the model wants to run and asks for a y/n.
   def confirm?(block)
-    puts "Agent wants to run: #{block.name}(#{block.input.inspect})"
-    print "Allow? (y/n) "
+    say "Agent wants to run: #{block.name}(#{block.input.inspect})"
+    print "#{indent}Allow? (y/n) "
     gets&.chomp&.downcase == "y"
   end
 end
