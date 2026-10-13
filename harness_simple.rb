@@ -15,10 +15,6 @@ def dispatch(name, input)
   end
 end
 
-TOOL_FUNCTIONS = {
-  "get_weather" => method(:get_weather)
-}
-
 TOOLS = [
   {
     name: "get_weather",
