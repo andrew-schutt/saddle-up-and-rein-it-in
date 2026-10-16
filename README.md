@@ -4,26 +4,33 @@ A side-by-side teaching artifact for a conference talk: two Ruby
 implementations of a minimum-viable AI agent harness, presented as a
 "before and after."
 
-- **`harness_simple.rb`** — the naive version. A single ~80-line file: one
-  tool function, a `case` dispatcher, an inline REPL and agent loop. The
-  baseline.
+- **`harness_simple.rb`** — the naive version. A single ~100-line file: one
+  stubbed tool function, a `case` dispatcher, an inline REPL and agent loop.
+  The baseline.
 - **`final/`** — the polished version. The same agent (same model, same
-  weather behavior) restructured into formalized abstractions and built up
-  in eleven layers, each adding one capability. Read
+  weather-assistant role) restructured into formalized abstractions and built
+  up in eleven layers, each adding one capability. Read
   [`final/LAYERS.md`](final/LAYERS.md) for the layer-by-layer walkthrough.
 
-Both are weather assistants backed by the live [Open-Meteo](https://open-meteo.com/)
-API (no key required for the weather itself).
+Both are weather assistants, but only `final/` fetches real weather, from the
+live [Open-Meteo](https://open-meteo.com/) API (no key required for the
+weather itself). The naive version's `get_weather` is a stub that always
+reports "72°F and sunny," which keeps the "before" focused on the agent loop.
 
 ## Prerequisites
 
-- **Ruby 3.2 or newer** (developed on Ruby 4.0).
+- **Ruby 3.2 or newer** (developed on Ruby 4.0). The repo's `.ruby-version`
+  pins 4.0.7, which rbenv and similar version managers pick up automatically.
 - **The `anthropic` gem.** There is no `Gemfile` — the project runs against a
   globally installed gem:
 
   ```sh
   gem install anthropic
   ```
+
+  Gems are installed per Ruby version. If you switch Rubies and see
+  `cannot load such file -- anthropic`, run the install again under the new
+  version.
 
 - **An Anthropic API key**, exported in your shell:
 
@@ -170,6 +177,7 @@ Ctrl-C mid-session won't persist that session's memory.
 
 ```
 .
+├── .ruby-version          # pins Ruby 4.0.7
 ├── harness_simple.rb      # the naive single-file harness (the "before")
 ├── Rakefile               # `rake test` runs the suite
 └── final/                 # the polished, layered harness (the "after")

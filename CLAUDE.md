@@ -6,11 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A side-by-side **teaching artifact** for a conference talk: two Ruby
 implementations of a minimum-viable AI agent harness, presented as "before and
-after." Both are weather assistants backed by the live Open-Meteo API and the
-Anthropic API.
+after." Both are weather assistants backed by the Anthropic API; only `final/`
+calls the live Open-Meteo API.
 
-- `harness_simple.rb` — the naive "before": one ~80-line file with a single
-  tool function, a `case` dispatcher, and an inline REPL + agent loop.
+- `harness_simple.rb` — the naive "before": one ~100-line file with a single
+  stubbed tool function (it returns a canned "72°F and sunny" report), a `case`
+  dispatcher, and an inline REPL + agent loop.
 - `final/` — the polished "after": the same agent restructured into formal
   abstractions, built up in **eleven layers, each adding one capability.**
 
@@ -34,8 +35,10 @@ ruby final/test/registry_test.rb   # a single test file
 LIVE_TESTS=1 rake test          # also hit the real Open-Meteo API (2 skipped tests)
 ```
 
-Requires Ruby 3.2+ and a globally installed `anthropic` gem (`gem install
-anthropic` — there is no Gemfile). Set `ANTHROPIC_API_KEY` to run the harnesses;
+Requires Ruby 3.2+ (`.ruby-version` pins 4.0.7 for rbenv and similar version
+managers) and a globally installed `anthropic` gem (`gem install anthropic` —
+there is no Gemfile). Gems are installed per Ruby version, so switching Rubies
+means installing the gem again. Set `ANTHROPIC_API_KEY` to run the harnesses;
 the test suite needs neither key nor network unless `LIVE_TESTS=1`.
 
 ## Architecture (the `final/` harness)
